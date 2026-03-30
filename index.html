@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok Campaign Dashboard - CIMB Niaga</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(226, 232, 240, 0.8);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+        }
+        
+        /* Print Styles for PDF Generation */
+        @media print {
+            @page { margin: 1cm; }
+            body, html { 
+                background-color: white !important; 
+                padding: 0 !important; 
+                height: auto !important; 
+                overflow: visible !important;
+                print-color-adjust: exact; 
+                -webkit-print-color-adjust: exact;
+            }
+            .glass-card { 
+                box-shadow: none !important; 
+                border: 1px solid #cbd5e1 !important; 
+                break-inside: avoid;
+                page-break-inside: avoid;
+                margin-bottom: 1.5rem !important;
+                backdrop-filter: none !important; /* CRITICAL FIX: prevents blank PDF bug */
+                -webkit-backdrop-filter: none !important;
+                background: white !important;
+            }
+            header { 
+                background-color: #b91c1c !important; 
+                color: white !important; 
+            }
+            .print-hidden { display: none !important; }
+            
+            /* Ensure charts retain height during print rendering */
+            canvas { max-height: 250px !important; }
+            .relative.h-60, .relative.h-64, .relative.h-72 {
+                height: 250px !important;
+            }
+        }
+    </style>
+</head>
+<body class="text-slate-800 antialiased min-h-screen p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto space-y-8">
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row justify-between items-center bg-red-700 text-white p-6 rounded-2xl shadow-lg">
+            <div class="flex items-center space-x-4 mb-4 md:mb-0">
+                <i class="fa-brands fa-tiktok text-4xl"></i>
+                <div>
+                    <h1 class="text-2xl font-bold tracking-tight">Campaign Performance Dashboard</h1>
+                    <p id="dashboard-subtitle" class="text-red-100 text-sm">Upload a dataset to begin</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-3 print-hidden">
+                <button onclick="window.print()" id="printBtn" class="hidden bg-red-800 hover:bg-red-900 text-white font-semibold py-2 px-4 rounded-full shadow transition duration-200 flex items-center space-x-2">
+                    <i class="fa-solid fa-print"></i>
+                    <span>Export PDF</span>
+                </button>
+                <label for="csvFileInput" class="cursor-pointer bg-white text-red-700 hover:bg-red-50 font-semibold py-2 px-6 rounded-full shadow transition duration-200 inline-flex items-center space-x-2">
+                    <i class="fa-solid fa-file-arrow-up"></i>
+                    <span>Upload CSV</span>
+                </label>
+                <input type="file" id="csvFileInput" accept=".csv" class="hidden">
+            </div>
+        </header>
+
+        <!-- Initial State / Loading -->
+        <div id="emptyState" class="glass-card rounded-2xl p-16 text-center border-dashed border-2 border-slate-300">
+            <div class="text-slate-400 mb-4">
+                <i class="fa-solid fa-chart-pie text-6xl"></i>
+            </div>
+            <h2 class="text-xl font-semibold text-slate-700 mb-2">No Data Loaded</h2>
+            <p class="text-slate-500 max-w-md mx-auto">Upload your <strong>TikTok Campaign CSV</strong> file using the button above to instantly visualize engagement metrics, top creators, and campaign reach.</p>
+        </div>
+
+        <!-- Dashboard Content (Hidden initially) -->
+        <div id="dashboard" class="hidden space-y-6">
+            
+            <!-- Brand Filter -->
+            <div id="brandFilterContainer" class="glass-card rounded-2xl p-4 flex flex-col md:flex-row items-center justify-between hidden">
+                <div class="mb-4 md:mb-0">
+                    <h3 class="font-semibold text-slate-700"><i class="fa-solid fa-filter text-red-600 mr-2"></i>Brand & Competitor Insight</h3>
+                    <p class="text-xs text-slate-500 mt-1 print-hidden">Filter to view CIMB Niaga's performance or analyze competitor strategies.</p>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-sm font-semibold hidden print:inline-block text-slate-800">Filtered View: <span id="printBrandName" class="text-red-600">All Brands</span></span>
+                    <select id="brandFilter" class="print-hidden bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-red-500 focus:border-red-500 block p-2.5 min-w-[250px] shadow-sm">
+                        <option value="all">All Brands (Overview)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- COMPACT AI Quick Readout -->
+            <div class="glass-card rounded-2xl p-5 border-l-4 border-red-500 shadow-md bg-gradient-to-br from-white to-red-50/20" style="print-color-adjust: exact; -webkit-print-color-adjust: exact;">
+                <div class="flex justify-between items-center mb-4">
+                    <div class="flex items-center space-x-2">
+                        <i class="fa-solid fa-wand-magic-sparkles text-red-600"></i>
+                        <h2 class="text-lg font-bold text-slate-800">Quick Readout (<span id="insight-total-posts">0</span> posts)</h2>
+                    </div>
+                    <span class="text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded"><span id="insight-date-start">...</span> to <span id="insight-date-end">...</span></span>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                    <!-- Timing Sweet Spots -->
+                    <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-center">
+                        <h4 class="font-semibold text-slate-800 mb-2"><i class="fa-solid fa-clock text-blue-500 mr-1"></i> Timing Sweet Spots</h4>
+                        <div class="space-y-1">
+                            <p class="flex justify-between"><span>Peak Reach:</span> <strong class="text-red-600"><span id="insight-reach-hour">...</span>:00 WIB</strong></p>
+                            <p class="text-xs text-slate-500 mb-2">Avg ~<span id="insight-reach-val">...</span> median plays</p>
+                            <p class="flex justify-between"><span>Peak Efficiency:</span> <strong class="text-red-600"><span id="insight-eng-val1">...</span>:00 WIB</strong></p>
+                            <p class="text-xs text-slate-500">Avg ~<span id="insight-eng-rate1">...</span> interactions/1k</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Distribution Skew -->
+                    <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-center">
+                        <h4 class="font-semibold text-slate-800 mb-2"><i class="fa-solid fa-chart-line text-emerald-500 mr-1"></i> Play Distribution</h4>
+                        <div class="space-y-2">
+                            <div class="flex justify-between items-end border-b border-slate-50 pb-1">
+                                <span class="text-slate-600">Median (Typical):</span>
+                                <strong class="text-lg">~<span id="insight-median-plays">...</span></strong>
+                            </div>
+                            <div class="flex justify-between items-end">
+                                <span class="text-slate-600">Top 10% (P90):</span>
+                                <strong class="text-lg text-emerald-600">~<span id="insight-p90-plays">...</span></strong>
+                            </div>
+                            <p class="text-xs text-slate-400 mt-1 italic">Highly skewed by viral outliers.</p>
+                        </div>
+                    </div>
+
+                    <!-- Recommendation -->
+                    <div class="bg-slate-800 text-white p-4 rounded-xl shadow-sm flex flex-col justify-center" style="print-color-adjust: exact; -webkit-print-color-adjust: exact; background-color: #1e293b !important; color: white !important;">
+                        <h4 class="font-semibold text-red-400 mb-2"><i class="fa-solid fa-bolt text-yellow-400 mr-1"></i> AI Recommendation</h4>
+                        <p class="text-slate-300 leading-relaxed text-sm">
+                            Schedule at <strong id="insight-reach-hour3" class="text-white">...:00</strong> for maximum raw volume/reach. Alternatively, post at <strong id="insight-eng-hours2" class="text-white">...:00</strong> to maximize engagement efficiency per view.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Brand Comparison Chart (Shows only on 'All Brands') -->
+            <div id="brandComparisonContainer" class="glass-card rounded-2xl p-6 hidden">
+                <h3 class="text-lg font-semibold text-slate-700 mb-4">Brand Comparison (Total Likes)</h3>
+                <div class="relative h-64 w-full">
+                    <canvas id="brandComparisonChart"></canvas>
+                </div>
+            </div>
+
+            <!-- KPI Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div class="glass-card rounded-2xl p-5 flex items-center space-x-4">
+                    <div class="bg-blue-100 text-blue-600 p-3 rounded-xl"><i class="fa-solid fa-video text-xl"></i></div>
+                    <div>
+                        <p class="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Videos</p>
+                        <h3 class="text-2xl font-bold text-slate-800" id="kpi-videos">0</h3>
+                    </div>
+                </div>
+                <div class="glass-card rounded-2xl p-5 flex items-center space-x-4">
+                    <div class="bg-red-100 text-red-600 p-3 rounded-xl"><i class="fa-solid fa-heart text-xl"></i></div>
+                    <div>
+                        <p class="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Likes</p>
+                        <h3 class="text-2xl font-bold text-slate-800" id="kpi-likes">0</h3>
+                    </div>
+                </div>
+                <div class="glass-card rounded-2xl p-5 flex items-center space-x-4">
+                    <div class="bg-emerald-100 text-emerald-600 p-3 rounded-xl"><i class="fa-solid fa-comment text-xl"></i></div>
+                    <div>
+                        <p class="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Comments</p>
+                        <h3 class="text-2xl font-bold text-slate-800" id="kpi-comments">0</h3>
+                    </div>
+                </div>
+                <div class="glass-card rounded-2xl p-5 flex items-center space-x-4">
+                    <div class="bg-purple-100 text-purple-600 p-3 rounded-xl"><i class="fa-solid fa-bookmark text-xl"></i></div>
+                    <div>
+                        <p class="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Saves/Collects</p>
+                        <h3 class="text-2xl font-bold text-slate-800" id="kpi-saves">0</h3>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Top Charts Row 1 -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Bar Chart: Top Authors -->
+                <div class="glass-card rounded-2xl p-6 flex flex-col">
+                    <h3 class="text-lg font-semibold text-slate-700 mb-4">Top Authors by Likes</h3>
+                    <div class="relative h-64 w-full flex-grow">
+                        <canvas id="authorChart"></canvas>
+                    </div>
+                    <div class="mt-4 pt-4 border-t border-slate-100 text-sm text-slate-600 bg-slate-50 p-3 rounded-lg">
+                        <i class="fa-solid fa-lightbulb text-amber-500 mr-1"></i> <span id="exp-author">Upload data to see insights.</span>
+                    </div>
+                </div>
+
+                <!-- Bar/Line Chart: Engagement per Post by Date -->
+                <div class="glass-card rounded-2xl p-6 flex flex-col">
+                    <h3 class="text-lg font-semibold text-slate-700 mb-1">Engagement Per Post (Timeline)</h3>
+                    <p class="text-xs text-slate-500 mb-3 print-hidden">Average likes per video based on publish date.</p>
+                    <div class="relative h-60 w-full flex-grow">
+                        <canvas id="engPerPostChart"></canvas>
+                    </div>
+                    <div class="mt-4 pt-4 border-t border-slate-100 text-sm text-slate-600 bg-slate-50 p-3 rounded-lg">
+                        <i class="fa-solid fa-lightbulb text-amber-500 mr-1"></i> <span id="exp-engPerPost">Upload data to see insights.</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Middle Charts Row 2 -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Pie Chart: Engagement Distribution -->
+                <div class="glass-card rounded-2xl p-6 flex flex-col">
+                    <h3 class="text-lg font-semibold text-slate-700 mb-4">Engagement Split</h3>
+                    <div class="relative h-60 w-full flex-grow">
+                        <canvas id="engagementPieChart"></canvas>
+                    </div>
+                    <div class="mt-4 pt-4 border-t border-slate-100 text-sm text-slate-600 bg-slate-50 p-3 rounded-lg">
+                        <i class="fa-solid fa-lightbulb text-amber-500 mr-1"></i> <span id="exp-pie">Upload data to see insights.</span>
+                    </div>
+                </div>
+                
+                <!-- Day of Week Chart -->
+                <div class="glass-card rounded-2xl p-6 lg:col-span-2 flex flex-col">
+                    <h3 class="text-lg font-semibold text-slate-700 mb-4">Engagement by Day of Week</h3>
+                    <div class="relative h-60 w-full flex-grow">
+                        <canvas id="dayOfWeekChart"></canvas>
+                    </div>
+                    <div class="mt-4 pt-4 border-t border-slate-100 text-sm text-slate-600 bg-slate-50 p-3 rounded-lg">
+                        <i class="fa-solid fa-lightbulb text-amber-500 mr-1"></i> <span id="exp-day">Upload data to see insights.</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom Charts Row 3 -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 break-inside-avoid">
+                <!-- Hashtags Chart -->
+                <div class="glass-card rounded-2xl p-6 flex flex-col">
+                    <h3 class="text-lg font-semibold text-slate-700 mb-4">Top Used Hashtags</h3>
+                    <div class="relative h-64 w-full flex-grow">
+                        <canvas id="hashtagChart"></canvas>
+                    </div>
+                    <div class="mt-4 pt-4 border-t border-slate-100 text-sm text-slate-600 bg-slate-50 p-3 rounded-lg">
+                        <i class="fa-solid fa-lightbulb text-amber-500 mr-1"></i> <span id="exp-hashtag">Upload data to see insights.</span>
+                    </div>
+                </div>
+
+                <!-- Mentions Chart -->
+                <div class="glass-card rounded-2xl p-6 flex flex-col">
+                    <h3 class="text-lg font-semibold text-slate-700 mb-4">Top Mentioned Accounts</h3>
+                    <div class="relative h-64 w-full flex-grow">
+                        <canvas id="mentionsChart"></canvas>
+                    </div>
+                    <div class="mt-4 pt-4 border-t border-slate-100 text-sm text-slate-600 bg-slate-50 p-3 rounded-lg">
+                        <i class="fa-solid fa-lightbulb text-amber-500 mr-1"></i> <span id="exp-mentions">Upload data to see insights.</span>
+                    </div>
+                </div>
+
+                <!-- Line Chart: Engagement over Time -->
+                <div class="glass-card rounded-2xl p-6 lg:col-span-2 flex flex-col mt-6">
+                    <h3 class="text-lg font-semibold text-slate-700 mb-4">Campaign Timeline (Likes Over Time)</h3>
+                    <div class="relative h-72 w-full flex-grow">
+                        <canvas id="timelineChart"></canvas>
+                    </div>
+                    <div class="mt-4 pt-4 border-t border-slate-100 text-sm text-slate-600 bg-slate-50 p-3 rounded-lg">
+                        <i class="fa-solid fa-lightbulb text-amber-500 mr-1"></i> <span id="exp-timeline">Upload data to see insights.</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Store chart instances to destroy them when reloading data
+        let chartInstances = {};
+        let globalData = [];
+        let brandColumn = '';
+        let cimbStats = null; // Store baseline CIMB stats for competitor comparison
+
+        // Robust Date Parser for TikTok exports (handles ISO strings, 10-digit sec timestamps, and 13-digit ms timestamps)
+        function parseTikTokDate(dateVal) {
+            if (!dateVal) return null;
+            // Handle Unix timestamps (often exported as numbers or numeric strings)
+            if (!isNaN(dateVal)) {
+                const numVal = Number(dateVal);
+                if (numVal.toString().length === 10) return new Date(numVal * 1000); // Seconds
+                if (numVal.toString().length === 13) return new Date(numVal); // Milliseconds
+            }
+            // Fallback to standard JS Date parsing (for ISO strings)
+            const d = new Date(dateVal);
+            return isNaN(d.getTime()) ? null : d;
+        }
+
+        // Identify if a brand string represents CIMB Niaga
+        function isCimbBrand(val) {
+            if (!val) return false;
+            const lower = String(val).toLowerCase();
+            return lower.includes('cimb') || lower.includes('niaga');
+        }
+
+        // Calculate CIMB Niaga's baseline stats once upon upload
+        function computeCimbBaseline(data) {
+            const cimbRows = data.filter(r => isCimbBrand(r[brandColumn]));
+            if (cimbRows.length === 0) return null;
+
+            let likes = 0, comments = 0, saves = 0;
+            let authors = {};
+            let days = { 'Sunday': 0, 'Monday': 0, 'Tuesday': 0, 'Wednesday': 0, 'Thursday': 0, 'Friday': 0, 'Saturday': 0 };
+            const daysArr = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+            cimbRows.forEach(r => {
+                const digg = Number(r.diggCount || r.digg_count || r['authorMeta/digg'] || 0);
+                likes += digg;
+                comments += Number(r.commentCount || r.comment_count || 0);
+                saves += Number(r.collectCount || r.collect_count || 0);
+
+                const author = r['authorMeta/name'] || r['authorMeta/nickName'] || 'Unknown';
+                if (!authors[author]) authors[author] = 0;
+                authors[author] += digg;
+
+                const d = parseTikTokDate(r.createTimeISO || r.createTime);
+                if (d) {
+                    const dayName = daysArr[d.getDay()];
+                    if (dayName) days[dayName] += digg;
+                }
+            });
+
+            const sortedAuthors = Object.keys(authors).sort((a, b) => authors[b] - authors[a]);
+            const topAuthor = sortedAuthors.length > 0 ? sortedAuthors[0] : 'Unknown';
+            const topAuthorLikes = sortedAuthors.length > 0 ? authors[topAuthor] : 0;
+            
+            const sortedDays = Object.keys(days).sort((a, b) => days[b] - days[a]);
+            const topDay = sortedDays.length > 0 ? sortedDays[0] : 'Unknown';
+            
+            const totalInt = likes + comments + saves;
+            const likeRatio = totalInt > 0 ? ((likes / totalInt) * 100).toFixed(1) : 0;
+
+            return {
+                totalLikes: likes,
+                likeRatio: likeRatio,
+                topAuthor: { name: topAuthor, likes: topAuthorLikes },
+                topDay: topDay
+            };
+        }
+
+        // Helper functions for statistics
+        function getPercentile(arr, p) {
+            if (arr.length === 0) return 0;
+            const sorted = [...arr].sort((a, b) => a - b);
+            const index = (sorted.length - 1) * p;
+            const lower = Math.floor(index);
+            const upper = lower + 1;
+            const weight = index % 1;
+            if (upper >= sorted.length) return sorted[lower];
+            return sorted[lower] * (1 - weight) + sorted[upper] * weight;
+        }
+
+        function getMedian(arr) { return getPercentile(arr, 0.5); }
+
+        document.getElementById('csvFileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            // Dynamically update the subtitle with the uploaded file's name
+            document.getElementById('dashboard-subtitle').innerText = `Dataset: ${file.name}`;
+            
+            Papa.parse(file, {
+                header: true,
+                dynamicTyping: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    globalData = results.data.filter(row => row && Object.keys(row).length > 1);
+                    if (globalData.length === 0) {
+                        alert("No valid data found in CSV. Please ensure the file format is correct.");
+                        return;
+                    }
+                    
+                    // Show Print button once data is loaded
+                    document.getElementById('printBtn').classList.remove('hidden');
+                    
+                    detectBrandColumn(globalData);
+                    cimbStats = computeCimbBaseline(globalData); // Store CIMB as the competitor baseline
+                    populateBrandFilter(globalData);
+                    updateDashboard();
+                },
+                error: function(err) {
+                    alert("Error reading file. Please ensure it is a valid CSV.");
+                    console.error(err);
+                }
+            });
+        });
+
+        document.getElementById('brandFilter').addEventListener('change', updateDashboard);
+
+        function detectBrandColumn(data) {
+            if(data.length === 0) return;
+            const keys = Object.keys(data[0]);
+            const candidates = ['brand', 'Brand', 'keyword', 'Keyword', 'search_keyword', 'query', 'campaign', 'Campaign'];
+            for(let c of candidates) {
+                if(keys.includes(c)) { brandColumn = c; return; }
+            }
+            brandColumn = keys.find(k => k.includes('authorMeta/name')) || keys.find(k => k.includes('author')) || 'Unknown';
+        }
+
+        function populateBrandFilter(data) {
+            const select = document.getElementById('brandFilter');
+            select.innerHTML = '<option value="all">All Brands (Overview)</option>';
+            const uniqueBrands = [...new Set(data.map(item => item[brandColumn]).filter(Boolean))];
+            
+            if (uniqueBrands.length > 0) {
+                document.getElementById('brandFilterContainer').classList.remove('hidden');
+            }
+            uniqueBrands.sort().forEach(brand => {
+                const opt = document.createElement('option');
+                opt.value = brand;
+                opt.textContent = brand;
+                select.appendChild(opt);
+            });
+        }
+
+        function updateDashboard() {
+            const selectedBrand = document.getElementById('brandFilter').value;
+            let filteredData = globalData;
+            
+            // Update Print-only text
+            document.getElementById('printBrandName').innerText = selectedBrand === 'all' ? 'All Brands (Overview)' : selectedBrand;
+            
+            if (selectedBrand !== 'all') {
+                filteredData = globalData.filter(row => String(row[brandColumn]) === String(selectedBrand));
+                document.getElementById('brandComparisonContainer').classList.add('hidden');
+            } else {
+                const uniqueBrands = [...new Set(globalData.map(item => item[brandColumn]).filter(Boolean))];
+                if (uniqueBrands.length > 1) {
+                    document.getElementById('brandComparisonContainer').classList.remove('hidden');
+                    renderBrandComparisonChart(globalData);
+                } else {
+                    document.getElementById('brandComparisonContainer').classList.add('hidden');
+                }
+            }
+            
+            processData(filteredData);
+            generateInsights(filteredData);
+        }
+
+        function generateInsights(data) {
+            if (data.length === 0) {
+                document.getElementById('insight-total-posts').innerText = '0';
+                document.getElementById('insight-date-start').innerText = '...';
+                document.getElementById('insight-date-end').innerText = '...';
+                document.getElementById('insight-median-plays').innerText = '0';
+                document.getElementById('insight-p90-plays').innerText = '0';
+                document.getElementById('insight-reach-hour').innerText = '...';
+                document.getElementById('insight-reach-hour3').innerText = '...';
+                document.getElementById('insight-reach-val').innerText = '0';
+                document.getElementById('insight-eng-val1').innerText = '...';
+                document.getElementById('insight-eng-hours2').innerText = '...';
+                document.getElementById('insight-eng-rate1').innerText = '0';
+                return;
+            }
+            
+            document.getElementById('insight-total-posts').innerText = data.length;
+
+            let minDate = 'N/A'; 
+            let maxDate = 'N/A';
+            const validDates = data.map(r => parseTikTokDate(r.createTimeISO || r.createTime)).filter(Boolean);
+            
+            if(validDates.length > 0) {
+                minDate = new Date(Math.min(...validDates)).toISOString().split('T')[0];
+                maxDate = new Date(Math.max(...validDates)).toISOString().split('T')[0];
+            }
+            document.getElementById('insight-date-start').innerText = minDate;
+            document.getElementById('insight-date-end').innerText = maxDate;
+
+            const hourlyData = {};
+            const allPlays = [];
+
+            data.forEach(row => {
+                const plays = Number(row.playCount || row.play_count || row.diggCount || row.digg_count || 0);
+                const likes = Number(row.diggCount || row.digg_count || 0);
+                const comments = Number(row.commentCount || row.comment_count || 0);
+                const saves = Number(row.collectCount || row.collect_count || 0);
+                const shares = Number(row.shareCount || row.share_count || 0);
+                
+                allPlays.push(plays);
+                
+                let hour = "00";
+                const d = parseTikTokDate(row.createTimeISO || row.createTime);
+                if (d) {
+                    hour = d.getHours().toString().padStart(2, '0');
+                }
+
+                if(!hourlyData[hour]) hourlyData[hour] = { plays: [], interactionsPer1k: [] };
+                
+                hourlyData[hour].plays.push(plays);
+                const totalInteractions = likes + comments + saves + shares;
+                const inter1k = plays > 0 ? (totalInteractions / (plays / 1000)) : 0;
+                hourlyData[hour].interactionsPer1k.push(inter1k);
+            });
+
+            const medianPlays = getMedian(allPlays);
+            const p90Plays = getPercentile(allPlays, 0.9);
+            document.getElementById('insight-median-plays').innerText = formatNumber(medianPlays);
+            document.getElementById('insight-p90-plays').innerText = formatNumber(p90Plays);
+
+            let bestReachHour = "N/A", bestReachMedian = 0, bestReachEng = 0;
+            const engHours = [];
+
+            for (let h in hourlyData) {
+                const medPlays = getMedian(hourlyData[h].plays);
+                const medEng = getMedian(hourlyData[h].interactionsPer1k);
+                
+                if (medPlays >= bestReachMedian) {
+                    bestReachMedian = medPlays;
+                    bestReachHour = h;
+                    bestReachEng = medEng;
+                }
+                if (hourlyData[h].plays.length > 0) {
+                    engHours.push({ hour: h, engRate: medEng });
+                }
+            }
+            engHours.sort((a, b) => b.engRate - a.engRate);
+            
+            document.getElementById('insight-reach-hour').innerText = bestReachHour;
+            document.getElementById('insight-reach-hour3').innerText = bestReachHour;
+            document.getElementById('insight-reach-val').innerText = formatNumber(bestReachMedian);
+
+            let eH1 = engHours.length > 0 ? engHours[0].hour : "N/A";
+            let eR1 = engHours.length > 0 ? engHours[0].engRate : 0;
+            
+            document.getElementById('insight-eng-val1').innerText = eH1;
+            document.getElementById('insight-eng-hours2').innerText = eH1;
+            document.getElementById('insight-eng-rate1').innerText = eR1.toFixed(2);
+        }
+
+        function formatNumber(num) {
+            if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+            return Math.round(num).toLocaleString();
+        }
+
+        function processData(data) {
+            document.getElementById('emptyState').classList.add('hidden');
+            document.getElementById('dashboard').classList.remove('hidden');
+
+            let totalVideos = data.length, totalLikes = 0, totalComments = 0, totalSaves = 0;
+            const authorStats = {}, timeStats = {}, hashtagCounts = {};
+            const mentionCounts = {};
+            const dayStats = { 'Sunday': 0, 'Monday': 0, 'Tuesday': 0, 'Wednesday': 0, 'Thursday': 0, 'Friday': 0, 'Saturday': 0 };
+            const daysArr = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const engPerPostStats = {};
+
+            data.forEach(row => {
+                const digg = Number(row.diggCount || row.digg_count || row['authorMeta/digg'] || 0);
+                const comment = Number(row.commentCount || row.comment_count || 0);
+                const collect = Number(row.collectCount || row.collect_count || 0);
+                const author = row['authorMeta/name'] || row['authorMeta/nickName'] || row.author || 'Unknown';
+                
+                const d = parseTikTokDate(row.createTimeISO || row.createTime);
+                if(d) {
+                    // Time Stats
+                    const dateOnly = d.toISOString().split('T')[0];
+                    if(!timeStats[dateOnly]) timeStats[dateOnly] = 0;
+                    timeStats[dateOnly] += digg;
+                    
+                    // Engagement Per Post Time Stats
+                    if(!engPerPostStats[dateOnly]) engPerPostStats[dateOnly] = { likes: 0, count: 0 };
+                    engPerPostStats[dateOnly].likes += digg;
+                    engPerPostStats[dateOnly].count += 1;
+                    
+                    // Day of Week Stats
+                    const dayName = daysArr[d.getDay()];
+                    if(dayName) dayStats[dayName] += digg;
+                }
+
+                // Hashtags
+                for(let key in row) {
+                    if(key.startsWith('hashtags/') && key.endsWith('/name') && row[key]) {
+                        const tag = row[key].toLowerCase();
+                        hashtagCounts[tag] = (hashtagCounts[tag] || 0) + 1;
+                    }
+                    // Mentions
+                    if(key.startsWith('detailedMentions/') && key.endsWith('/name') && row[key]) {
+                        const mention = row[key];
+                        mentionCounts[mention] = (mentionCounts[mention] || 0) + 1;
+                    }
+                }
+
+                totalLikes += digg;
+                totalComments += comment;
+                totalSaves += collect;
+
+                if (!authorStats[author]) authorStats[author] = { likes: 0, videos: 0 };
+                authorStats[author].likes += digg;
+                authorStats[author].videos += 1;
+            });
+
+            document.getElementById('kpi-videos').innerText = formatNumber(totalVideos);
+            document.getElementById('kpi-likes').innerText = formatNumber(totalLikes);
+            document.getElementById('kpi-comments').innerText = formatNumber(totalComments);
+            document.getElementById('kpi-saves').innerText = formatNumber(totalSaves);
+
+            renderAuthorChart(authorStats);
+            renderEngagementPieChart(totalLikes, totalComments, totalSaves);
+            renderTimelineChart(timeStats);
+            renderHashtagChart(hashtagCounts);
+            renderDayOfWeekChart(dayStats);
+            renderMentionsChart(mentionCounts);
+            renderEngPerPostChart(engPerPostStats);
+        }
+
+        function destroyChart(id) { if (chartInstances[id]) chartInstances[id].destroy(); }
+
+        function renderAuthorChart(authorStats) {
+            destroyChart('authorChart');
+            const sortedAuthors = Object.keys(authorStats).map(a => ({ name: a, likes: authorStats[a].likes }))
+                .sort((a, b) => b.likes - a.likes).slice(0, 10);
+            
+            const selectedBrand = document.getElementById('brandFilter').value;
+            const isCompetitor = selectedBrand !== 'all' && !isCimbBrand(selectedBrand);
+            
+            if(sortedAuthors.length > 0 && sortedAuthors[0].likes > 0) {
+                if (isCompetitor && cimbStats && cimbStats.topAuthor) {
+                    const diff = sortedAuthors[0].likes > cimbStats.topAuthor.likes ? "outperforming" : "trailing behind";
+                    document.getElementById('exp-author').innerHTML = `Competitor <strong>${selectedBrand}</strong>'s top creator is <strong>${sortedAuthors[0].name}</strong> (${formatNumber(sortedAuthors[0].likes)} likes). For comparison, CIMB Niaga's top creator is <strong>${cimbStats.topAuthor.name}</strong> (${formatNumber(cimbStats.topAuthor.likes)} likes). This shows ${selectedBrand} is ${diff} our top partner's raw reach.`;
+                } else if (isCimbBrand(selectedBrand)) {
+                    document.getElementById('exp-author').innerHTML = `<strong>${sortedAuthors[0].name}</strong> is CIMB Niaga's top performing creator, driving <strong>${formatNumber(sortedAuthors[0].likes)}</strong> likes. Partnering heavily with them or similar profiles is highly recommended.`;
+                } else {
+                    document.getElementById('exp-author').innerHTML = `Across the landscape, <strong>${sortedAuthors[0].name}</strong> is the top performing creator, driving <strong>${formatNumber(sortedAuthors[0].likes)}</strong> likes.`;
+                }
+            } else {
+                document.getElementById('exp-author').innerHTML = `No author engagement data available.`;
+            }
+
+            const ctx = document.getElementById('authorChart').getContext('2d');
+            chartInstances['authorChart'] = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: sortedAuthors.map(a => a.name.length > 15 ? a.name.substring(0,15)+'...' : a.name),
+                    datasets: [{
+                        label: 'Total Likes', data: sortedAuthors.map(a => a.likes),
+                        backgroundColor: 'rgba(239, 68, 68, 0.8)', borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, grid: { color: '#f1f5f9' } }, x: { grid: { display: false } } }
+                }
+            });
+        }
+
+        function renderEngagementPieChart(likes, comments, saves) {
+            destroyChart('engagementPieChart');
+            
+            const selectedBrand = document.getElementById('brandFilter').value;
+            const isCompetitor = selectedBrand !== 'all' && !isCimbBrand(selectedBrand);
+            const total = likes + comments + saves;
+
+            if(total > 0) {
+                const likePct = ((likes / total) * 100).toFixed(1);
+                if (isCompetitor && cimbStats && cimbStats.likeRatio > 0) {
+                    const context = likePct > cimbStats.likeRatio 
+                        ? "meaning their audience interaction is shallower compared to our deeper interactions (saves/comments)."
+                        : "meaning they are successfully driving deeper interactions (saves/comments) compared to our campaign.";
+                    document.getElementById('exp-pie').innerHTML = `Competitor <strong>${selectedBrand}</strong> relies on likes for <strong>${likePct}%</strong> of engagement (vs CIMB Niaga's ${cimbStats.likeRatio}%), ${context}`;
+                } else if (isCimbBrand(selectedBrand)) {
+                    document.getElementById('exp-pie').innerHTML = `For CIMB Niaga, likes make up <strong>${likePct}%</strong> of all measurable interactions. A higher proportion of saves or comments indicates high-value, educational content.`;
+                } else {
+                     document.getElementById('exp-pie').innerHTML = `Overall, likes make up <strong>${likePct}%</strong> of all measurable interactions.`;
+                }
+            } else {
+                document.getElementById('exp-pie').innerHTML = `No engagement data available to split.`;
+            }
+
+            const ctx = document.getElementById('engagementPieChart').getContext('2d');
+            chartInstances['engagementPieChart'] = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Likes', 'Comments', 'Saves/Collects'],
+                    datasets: [{
+                        data: [likes, comments, saves],
+                        backgroundColor: ['rgba(239, 68, 68, 0.8)', 'rgba(16, 185, 129, 0.8)', 'rgba(139, 92, 246, 0.8)'],
+                        borderWidth: 0, hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom' } }, cutout: '65%'
+                }
+            });
+        }
+
+        function renderTimelineChart(timeStats) {
+            destroyChart('timelineChart');
+            const sortedDates = Object.keys(timeStats).sort();
+            const data = sortedDates.map(date => timeStats[date]);
+            
+            const selectedBrand = document.getElementById('brandFilter').value;
+            const isCompetitor = selectedBrand !== 'all' && !isCimbBrand(selectedBrand);
+            
+            let peakDate = '';
+            let peakVal = 0;
+            for(let d in timeStats) {
+                if(timeStats[d] > peakVal) { peakVal = timeStats[d]; peakDate = d; }
+            }
+
+            if(peakDate && peakVal > 0) {
+                if (isCompetitor) {
+                    document.getElementById('exp-timeline').innerHTML = `Competitor <strong>${selectedBrand}</strong> had a major viral spike on <strong>${peakDate}</strong> (${formatNumber(peakVal)} likes). We should investigate their content on this day to see what trends they capitalized on compared to CIMB Niaga's timeline.`;
+                } else if (isCimbBrand(selectedBrand)) {
+                     document.getElementById('exp-timeline').innerHTML = `CIMB Niaga's engagement peaked heavily on <strong>${peakDate}</strong>, accumulating <strong>${formatNumber(peakVal)}</strong> likes in a single day. Review this content for replication.`;
+                } else {
+                     document.getElementById('exp-timeline').innerHTML = `Overall landscape engagement peaked on <strong>${peakDate}</strong>.`;
+                }
+            } else {
+                document.getElementById('exp-timeline').innerHTML = `No timeline data available.`;
+            }
+
+            const ctx = document.getElementById('timelineChart').getContext('2d');
+            chartInstances['timelineChart'] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: sortedDates,
+                    datasets: [{
+                        label: 'Likes Received', data: data,
+                        borderColor: 'rgba(59, 130, 246, 1)', backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderWidth: 3, pointBackgroundColor: 'rgba(59, 130, 246, 1)',
+                        pointRadius: 4, fill: true, tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, grid: { color: '#f1f5f9' } }, x: { grid: { display: false } } }
+                }
+            });
+        }
+
+        function renderHashtagChart(hashtagCounts) {
+            destroyChart('hashtagChart');
+            const sortedTags = Object.keys(hashtagCounts).map(tag => ({ tag: tag, count: hashtagCounts[tag] }))
+                .sort((a, b) => b.count - a.count).slice(0, 10);
+            
+            const selectedBrand = document.getElementById('brandFilter').value;
+            const isCompetitor = selectedBrand !== 'all' && !isCimbBrand(selectedBrand);
+            
+            if(sortedTags.length > 0) {
+                if (isCompetitor) {
+                    document.getElementById('exp-hashtag').innerHTML = `Competitor <strong>${selectedBrand}</strong> frequently leverages <strong>#${sortedTags[0].tag}</strong> (${sortedTags[0].count} videos). We should analyze if this is a branded hashtag or a broader financial trend CIMB Niaga is missing out on.`;
+                } else if (isCimbBrand(selectedBrand)) {
+                    document.getElementById('exp-hashtag').innerHTML = `<strong>#${sortedTags[0].tag}</strong> is CIMB Niaga's most consistently used hashtag, appearing in <strong>${sortedTags[0].count}</strong> videos.`;
+                } else {
+                     document.getElementById('exp-hashtag').innerHTML = `<strong>#${sortedTags[0].tag}</strong> is the most consistently used hashtag overall.`;
+                }
+            } else {
+                document.getElementById('exp-hashtag').innerHTML = `No hashtags were detected in this dataset.`;
+            }
+
+            const ctx = document.getElementById('hashtagChart').getContext('2d');
+            chartInstances['hashtagChart'] = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: sortedTags.map(t => '#' + t.tag),
+                    datasets: [{
+                        label: 'Video Count', data: sortedTags.map(t => t.count),
+                        backgroundColor: 'rgba(99, 102, 241, 0.8)', borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+                    plugins: { legend: { display: false } },
+                    scales: { x: { beginAtZero: true, grid: { color: '#f1f5f9' } }, y: { grid: { display: false } } }
+                }
+            });
+        }
+
+        function renderBrandComparisonChart(data) {
+            destroyChart('brandComparisonChart');
+            const brandStats = {};
+            data.forEach(row => {
+                const brand = row[brandColumn] || 'Unknown';
+                const digg = Number(row.diggCount || row.digg_count || 0);
+                if (!brandStats[brand]) brandStats[brand] = 0;
+                brandStats[brand] += digg;
+            });
+            const sortedBrands = Object.keys(brandStats).map(b => ({ brand: b, likes: brandStats[b] }))
+                .sort((a, b) => b.likes - a.likes).slice(0, 15);
+            const ctx = document.getElementById('brandComparisonChart').getContext('2d');
+            chartInstances['brandComparisonChart'] = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: sortedBrands.map(b => b.brand.length > 25 ? b.brand.substring(0,25)+'...' : b.brand),
+                    datasets: [{
+                        label: 'Total Likes', data: sortedBrands.map(b => b.likes),
+                        backgroundColor: 'rgba(245, 158, 11, 0.8)', borderRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, grid: { color: '#f1f5f9' } }, x: { grid: { display: false } } }
+                }
+            });
+        }
+
+        function renderDayOfWeekChart(dayStats) {
+            destroyChart('dayOfWeekChart');
+            const daysArr = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const data = daysArr.map(d => dayStats[d]);
+            
+            const selectedBrand = document.getElementById('brandFilter').value;
+            const isCompetitor = selectedBrand !== 'all' && !isCimbBrand(selectedBrand);
+            
+            let topDay = '';
+            let maxDay = 0;
+            for(let d in dayStats) {
+                if(dayStats[d] > maxDay) { maxDay = dayStats[d]; topDay = d; }
+            }
+
+            if(topDay && maxDay > 0) {
+                if (isCompetitor && cimbStats && cimbStats.topDay) {
+                    document.getElementById('exp-day').innerHTML = `Competitor <strong>${selectedBrand}</strong> captures the most engagement on <strong>${topDay}</strong> (${formatNumber(maxDay)} likes). CIMB Niaga's strongest day historically is <strong>${cimbStats.topDay}</strong>. We can either attack their peak day or dominate the off-days.`;
+                } else if (isCimbBrand(selectedBrand)) {
+                    document.getElementById('exp-day').innerHTML = `CIMB Niaga videos published on <strong>${topDay}</strong> historically accumulate the highest overall engagement.`;
+                } else {
+                    document.getElementById('exp-day').innerHTML = `Historically, videos published on <strong>${topDay}</strong> accumulated the highest overall engagement.`;
+                }
+            } else {
+                document.getElementById('exp-day').innerHTML = `No day of week data available.`;
+            }
+
+            const ctx = document.getElementById('dayOfWeekChart').getContext('2d');
+            chartInstances['dayOfWeekChart'] = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: daysArr,
+                    datasets: [{
+                        label: 'Total Likes',
+                        data: data,
+                        backgroundColor: 'rgba(236, 72, 153, 0.8)', // Pink
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, grid: { color: '#f1f5f9' } }, x: { grid: { display: false } } }
+                }
+            });
+        }
+
+        function renderMentionsChart(mentionCounts) {
+            destroyChart('mentionsChart');
+            const sortedMentions = Object.keys(mentionCounts).map(m => ({ mention: m, count: mentionCounts[m] }))
+                .sort((a, b) => b.count - a.count).slice(0, 10);
+            
+            const selectedBrand = document.getElementById('brandFilter').value;
+            const isCompetitor = selectedBrand !== 'all' && !isCimbBrand(selectedBrand);
+            
+            if(sortedMentions.length > 0) {
+                if (isCompetitor) {
+                     document.getElementById('exp-mentions').innerHTML = `Competitor <strong>${selectedBrand}</strong> heavily tags <strong>@${sortedMentions[0].mention}</strong>. We should review if this account is a key brand ambassador we should also be courting or competing against.`;
+                } else if (isCimbBrand(selectedBrand)) {
+                     document.getElementById('exp-mentions').innerHTML = `<strong>@${sortedMentions[0].mention}</strong> is the most tagged account for CIMB Niaga, indicating strong partnership association.`;
+                } else {
+                    document.getElementById('exp-mentions').innerHTML = `<strong>@${sortedMentions[0].mention}</strong> is the most tagged account across the landscape.`;
+                }
+            } else {
+                document.getElementById('exp-mentions').innerHTML = `No significant account mentions found in this dataset.`;
+            }
+
+            const ctx = document.getElementById('mentionsChart').getContext('2d');
+            chartInstances['mentionsChart'] = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: sortedMentions.map(m => '@' + m.mention),
+                    datasets: [{
+                        label: 'Tagged Count', data: sortedMentions.map(m => m.count),
+                        backgroundColor: 'rgba(14, 165, 233, 0.8)', // Sky Blue
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+                    plugins: { legend: { display: false } },
+                    scales: { x: { beginAtZero: true, grid: { color: '#f1f5f9' } }, y: { grid: { display: false } } }
+                }
+            });
+        }
+
+        function renderEngPerPostChart(engPerPostStats) {
+            destroyChart('engPerPostChart');
+            
+            const selectedBrand = document.getElementById('brandFilter').value;
+            const isCompetitor = selectedBrand !== 'all' && !isCimbBrand(selectedBrand);
+            
+            const sortedDates = Object.keys(engPerPostStats).sort();
+            const data = sortedDates.map(date => {
+                const stat = engPerPostStats[date];
+                return stat.count > 0 ? (stat.likes / stat.count) : 0;
+            });
+            
+            // Insight generation: Find highest efficiency day
+            let bestDate = '';
+            let highestAvg = 0;
+            
+            for(let i=0; i<sortedDates.length; i++) {
+                if(data[i] > highestAvg) {
+                    highestAvg = data[i];
+                    bestDate = sortedDates[i];
+                }
+            }
+
+            const expElement = document.getElementById('exp-engPerPost');
+            if(bestDate && highestAvg > 0) {
+                let textHtml = '';
+                if (isCompetitor) {
+                     textHtml = `Competitor <strong>${selectedBrand}</strong> saw their highest efficiency on <strong>${bestDate}</strong>, averaging <strong>${formatNumber(highestAvg)}</strong> likes per post.`;
+                } else if (isCimbBrand(selectedBrand)) {
+                     textHtml = `CIMB Niaga's most efficient day was <strong>${bestDate}</strong>, averaging <strong>${formatNumber(highestAvg)}</strong> likes per post. We should analyze the specific content posted that day.`;
+                } else {
+                     textHtml = `The highest engagement efficiency occurred on <strong>${bestDate}</strong>, averaging <strong>${formatNumber(highestAvg)}</strong> likes per post.`;
+                }
+                if (expElement) expElement.innerHTML = textHtml;
+            } else {
+                if (expElement) expElement.innerHTML = `Not enough timeline data to identify engagement efficiency.`;
+            }
+
+            const ctx = document.getElementById('engPerPostChart').getContext('2d');
+            chartInstances['engPerPostChart'] = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: sortedDates,
+                    datasets: [{
+                        label: 'Avg Likes Per Post',
+                        data: data,
+                        backgroundColor: 'rgba(168, 85, 247, 0.7)', // Purple
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { 
+                        x: { grid: { display: false } }, 
+                        y: { beginAtZero: true, grid: { color: '#f1f5f9' } } 
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
